@@ -15,29 +15,21 @@ Research from USENIX Security 2025 found that across 576,000 code samples, LLMs 
 
 ## Detection Architecture
 
-This framework takes a **defence-in-depth** approach with two independent layers:
+This framework takes a defence-in-depth approach across two independent pipeline stages, addressing a gap that traditional SCA tools currently miss: they check packages against known CVE databases, but have no mechanism to catch newly registered hallucinated packages that haven't been flagged yet.
 
-```
-Developer writes AI-assisted code
-            │
-            ▼
-┌─────────────────────────────┐
-│  LAYER 1: GitHub Actions    │  ← Pre-install gate
-│  Package trust scorer       │    Blocks suspicious packages
-│  Runs on every code push    │    before they enter the repo
-└─────────────────────────────┘
-            │
-            │ (if something slips through)
-            ▼
-┌─────────────────────────────┐
-│  LAYER 2: Microsoft         │  ← Post-install CCTV
-│  Sentinel KQL Rule          │    Detects malicious runtime
-│  Continuous monitoring      │    behaviour after install
-└─────────────────────────────┘
-```
+### Layer 1 — CI/CD Gate (Pre-Install)
+
+Integrated directly into GitHub Actions, this layer intercepts every push and pull request before code can be merged. It reads the project's `requirements.txt`, queries the PyPI registry for each package, and runs a trust scoring algorithm across five behavioural signals: package existence, registration age, download volume, documentation presence, and source code transparency. Any package scoring above the suspicion threshold fails the build automatically. The developer is forced to investigate before the pipeline continues.
+
+This is the prevention layer. It operates on the assumption that most slopsquatting attempts will be caught here — either because the hallucinated package doesn't exist yet, or because a recently registered attacker package exhibits low-trust signals that legitimate packages don't.
+
+### Layer 2 — Runtime Monitoring (Post-Install)
+
+No prevention layer is perfect. Packages can enter a codebase through local installs, dependency chains, or CI/CD misconfigurations that bypass Layer 1. The Sentinel KQL rule addresses this by continuously correlating two data sources from Microsoft Defender for Endpoint: package install events and outbound network connections. If a Python or Node process makes an external network call within ten minutes of a package being installed on the same machine, an alert fires and an incident is created for SOC review.
+
+Legitimate utility packages have no reason to initiate network connections immediately after installation. This behavioural baseline is what makes the detection reliable — it doesn't depend on signatures or known-bad lists, only on anomalous behaviour relative to expected package functionality.
 
 > **Layer 1 prevents. Layer 2 detects. Because prevention alone is never sufficient.**
-
 ---
 
 ## Layer 1 — GitHub Actions (Pre-Install)
@@ -128,5 +120,5 @@ As vibe coding becomes standard and AI agents autonomously install dependencies,
 ## Author
 
 **Yuhan Perera**  
-Cybersecurity Student & Analyst — Deakin University  
+Cybersecurity Analyst  
 [LinkedIn](https://www.linkedin.com/in/yuhanhb)
