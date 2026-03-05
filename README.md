@@ -1,0 +1,1 @@
+# slopsquatting-detection
