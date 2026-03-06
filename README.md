@@ -9,6 +9,7 @@ AI coding assistants like GitHub Copilot and ChatGPT sometimes hallucinate packa
 This attack vector was coined **"slopsquatting"** by Python Software Foundation researcher Seth Larson, and represents an emerging supply chain threat as AI-generated code becomes the norm.
 
 Research from USENIX Security 2025 found that across 576,000 code samples, LLMs hallucinate package names in predictable patterns:
+
 - **51%** are pure fabrications
 - **38%** are conflations of two real packages (e.g. `express-mongoose`)
 - **13%** are typo variants of real packages
@@ -30,6 +31,7 @@ No prevention layer is perfect. Packages can enter a codebase through local inst
 Legitimate utility packages have no reason to initiate network connections immediately after installation. This behavioural baseline is what makes the detection reliable — it doesn't depend on signatures or known-bad lists, only on anomalous behaviour relative to expected package functionality.
 
 > **Layer 1 prevents. Layer 2 detects. Because prevention alone is never sufficient.**
+
 ---
 
 ## Layer 1 — GitHub Actions (Pre-Install)
@@ -63,12 +65,8 @@ Runs automatically on every push or pull request. Reads `requirements.txt` and s
     ✔  No suspicious signals detected
     ✅ Score: 0/100 — OK
 
-  Checking: fastapi-aws-auth-helper
-    🆕 NEW: Package only 4 days old (registered 2026-03-01)
-    📉 LOW DOWNLOADS: Only 12 downloads in the last 30 days
-    📭 NO DESCRIPTION: Package has no meaningful summary
-    👤 NO AUTHOR: No author or maintainer listed
-    🔗 NO SOURCE LINK: No repository or source code link found
+  Checking: azure-keyvault-session-helper
+    ❌ CRITICAL: Package does not exist on PyPI
     🚨 SUSPICION SCORE: 100/100 — BUILD BLOCKED
 
 ============================================================
@@ -97,6 +95,45 @@ If a network connection is made within **10 minutes** of a package install on th
 3. Schedule: run every 1 hour, look back 24 hours
 4. Threshold: trigger if results > 0
 5. Severity: High
+
+---
+
+## Usage
+
+### Requirements
+
+- Python 3.9+
+- A `requirements.txt` file in the root of your project
+
+### Running Locally
+
+Clone the repository and install dependencies:
+
+```bash
+git clone https://github.com/yuhanhb/slopsquatting-detection.git
+cd slopsquatting-detection
+pip install requests python-dateutil
+```
+
+Add the packages you want to check to `requirements.txt`, then run:
+
+```bash
+python slopsquatting_check.py
+```
+
+### Adding to Your Own Project
+
+To integrate this into any existing Python project:
+
+1. Copy `slopsquatting_check.py` into your project root
+2. Copy `.github/workflows/slopsquatting-check.yml` into your project's `.github/workflows/` folder
+3. Push to GitHub — the check will run automatically on every push and pull request
+
+No configuration needed. The workflow will read your existing `requirements.txt` and score each package automatically.
+
+### Real-World Test
+
+This framework has been tested against [Vulpy](https://github.com/yuhanhb/vulpy), a deliberately vulnerable Python web application used for security training. All 9 of Vulpy's real production dependencies passed cleanly, confirming the framework does not generate false positives against legitimate packages.
 
 ---
 
