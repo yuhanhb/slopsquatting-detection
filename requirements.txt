@@ -1,2 +1,7 @@
+# Real packages
 requests
-fastapi-aws-auth-helper
+boto3
+fastapi
+
+# AI-suggested dependency (hallucinated)
+azure-keyvault-session-helper
