@@ -1,0 +1,123 @@
+// =============================================================
+// LAYER 2: SLOPSQUATTING DETECTION — Microsoft Sentinel KQL
+// =============================================================
+// What this is: A detection rule that runs continuously inside
+// Microsoft Sentinel (a SIEM — Security Information & Event
+// Management platform, like Splunk but Microsoft's version).
+//
+// You're already familiar with SIEMs from your SOC work.
+// This is the same concept — you're writing a query that
+// watches logs and fires an alert when something looks wrong.
+//
+// WHAT WE'RE LOOKING FOR:
+// A malicious package that slipped past Layer 1 will eventually
+// try to DO something — phone home, steal credentials, read
+// files it shouldn't. This query detects that behaviour by
+// looking at process execution logs from Microsoft Defender
+// for Endpoint, which captures everything running on a machine.
+//
+// The query looks for Python or Node processes that:
+//   1. Were spawned by a package installer (pip/npm)
+//   2. Then immediately made an outbound network connection
+//
+// Legitimate packages don't do this. Malicious ones do.
+// =============================================================
+
+// ── STEP 1: FIND PACKAGE INSTALL EVENTS ──────────────────────
+// Look at process execution logs from the last 24 hours.
+// We're filtering for pip or npm install commands —
+// these are the moments packages enter the system.
+let PackageInstallEvents =
+    DeviceProcessEvents                          // Defender for Endpoint process log
+    | where Timestamp > ago(24h)                // Only look at the last 24 hours
+    | where FileName in ("pip.exe", "pip3.exe", "pip",    // Python package installer
+                         "npm.cmd", "npm",                 // Node package installer
+                         "python.exe", "python3", "node") // The runtimes themselves
+    | where ProcessCommandLine has_any ("install", "add") // Only actual installs
+    | project
+        InstallTime     = Timestamp,
+        DeviceId,                                // Which machine did this happen on?
+        DeviceName,
+        InstallerProcess = FileName,
+        InstallCommand  = ProcessCommandLine,    // Full command e.g. "pip install secretlib"
+        InitiatingUser  = AccountName;           // Who ran this?
+
+// ── STEP 2: FIND SUSPICIOUS NETWORK CONNECTIONS ───────────────
+// Now look at network connection logs from the same period.
+// We're looking for Python or Node processes making outbound
+// connections — i.e., phoning home to an attacker's server.
+//
+// Legitimate utility packages (e.g. a date formatter, a math lib)
+// have NO reason to make network connections. If they do, that's
+// a major red flag — a classic sign of a malicious package.
+let SuspiciousNetworkEvents =
+    DeviceNetworkEvents                          // Defender for Endpoint network log
+    | where Timestamp > ago(24h)
+    | where InitiatingProcessFileName in~ (      // Process making the connection
+        "python.exe", "python3", "python",
+        "node.exe", "node"
+    )
+    | where RemotePort in (80, 443, 4444, 1337, 8080, 8443) // Common exfil/C2 ports
+                                                 // 4444 and 1337 are classic attacker ports
+    | where RemoteIPType != "Private"            // Ignore internal network traffic
+                                                 // We only care about calls going OUT to the internet
+    | project
+        NetworkTime     = Timestamp,
+        DeviceId,
+        DeviceName,
+        CallingProcess  = InitiatingProcessFileName,
+        CommandLine     = InitiatingProcessCommandLine,
+        DestinationIP   = RemoteIP,
+        DestinationUrl  = RemoteUrl,
+        Port            = RemotePort;
+
+// ── STEP 3: JOIN THE TWO — CORRELATE INSTALL → NETWORK ───────
+// This is the key detection logic.
+// We join the two tables on the same machine (DeviceId),
+// and filter for network connections that happened WITHIN
+// 10 MINUTES of a package being installed.
+//
+// Why 10 minutes? Because malicious packages execute their
+// payload almost immediately on install. If a package was
+// installed at 2:00pm and a Python process called home at
+// 2:03pm on the same machine — that's your alert.
+PackageInstallEvents
+| join kind=inner SuspiciousNetworkEvents
+    on DeviceId                                  // Same machine
+| where NetworkTime between (                    // Network call happened AFTER install
+    InstallTime .. (InstallTime + 10m)           // Within a 10-minute window
+  )
+
+// ── STEP 4: SURFACE THE RELEVANT FIELDS FOR THE ANALYST ──────
+// Clean up the output so a SOC analyst can immediately see
+// what happened, on which machine, by whom, and where it called.
+| project
+    AlertTime       = NetworkTime,
+    DeviceName,
+    AffectedUser    = InitiatingUser,
+    InstallCommand,                              // e.g. "pip install suspiciouslib"
+    InstallerProcess,
+    CallingProcess,
+    DestinationIP,
+    DestinationUrl,
+    Port,
+    TimeSinceInstall = NetworkTime - InstallTime // How quickly did it phone home?
+
+// ── STEP 5: SORT BY MOST RECENT ──────────────────────────────
+| sort by AlertTime desc
+
+// =============================================================
+// HOW TO USE THIS IN SENTINEL:
+//
+// 1. Go to Microsoft Sentinel → Analytics → Create Rule
+// 2. Paste this query into the Rule Query field
+// 3. Set schedule: run every 1 hour, look back 24 hours
+// 4. Set alert threshold: trigger if results > 0
+// 5. Set severity: High
+// 6. Map entities: DeviceName, AffectedUser, DestinationIP
+//
+// Every time this fires, a SOC analyst gets an incident ticket
+// with the machine name, the package that was installed, and
+// the IP address it tried to call. They can then isolate the
+// machine and investigate the package.
+// =============================================================
